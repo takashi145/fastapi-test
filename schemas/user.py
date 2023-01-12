@@ -1,6 +1,11 @@
 from pydantic import BaseModel, Field, EmailStr
 
 
+class User(BaseModel):
+    id: int
+    username: str
+
+
 class UserCreate(BaseModel):
     username: str = Field(
         ...,
@@ -21,3 +26,4 @@ class UserCreate(BaseModel):
         max_length=32,
         nullable=False
     )
+
