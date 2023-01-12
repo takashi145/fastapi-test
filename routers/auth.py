@@ -77,7 +77,7 @@ async def register(user: UserCreate, db: Session = Depends(get_db)):
     if user.password != user.password_confirmation:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="パスワードが一致しません"
+            detail="password does not match"
         )
     new_user = models.User(
         username=user.username,
@@ -132,6 +132,13 @@ async def get_current_user(access_token: str = Depends(oauth2_schema), db: Sessi
 
 @router.get("/refresh")
 async def refresh(refresh_token: Optional[str] = Cookie(None), db: Session = Depends(get_db)):
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     user = get_user(refresh_token, db)
 
     if not user.refresh_token == refresh_token:
@@ -147,3 +154,13 @@ async def refresh(refresh_token: Optional[str] = Cookie(None), db: Session = Dep
     )
 
     return access_token
+
+
+@router.post('/logout', status_code=status.HTTP_204_NO_CONTENT)
+async def logout(response: Response, access_token: str = Depends(oauth2_schema), db: Session = Depends(get_db)):
+    user = get_user(access_token, db)
+    user.refresh_token = None
+    db.commit()
+    db.refresh(user)
+    response.delete_cookie(key="refresh_token")
+    return
