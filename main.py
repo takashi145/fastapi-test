@@ -12,4 +12,4 @@ def index():
     return 'Hello World!'
 
 
-models.Base.metadata.create_all(engine)
+#models.Base.metadata.create_all(engine)

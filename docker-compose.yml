@@ -1,0 +1,18 @@
+version: '3.8'
+services:
+
+  postgres:
+    image: postgres:14.2-alpine
+    container_name: postgres
+    ports:
+      - ${DB_PORT}:5432
+    volumes:
+      # - ./docker/db/init.d:/docker-entrypoint-initdb.d/
+      - db-store:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+  
+volumes:
+  db-store:

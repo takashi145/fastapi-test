@@ -127,7 +127,7 @@ async def login(response: Response, form_data: OAuth2PasswordRequestForm = Depen
 @router.get('/user', status_code=status.HTTP_200_OK, response_model=User)
 async def get_current_user(access_token: str = Depends(oauth2_schema), db: Session = Depends(get_db)):
     user = get_user(access_token, db)
-    return User(id=user.id, username=user.username, email=user.email)
+    return user
 
 
 @router.get("/refresh")
