@@ -1,88 +1,45 @@
-from fastapi import APIRouter, status, Depends, HTTPException, Response, Cookie
+from fastapi import APIRouter, status, Depends, HTTPException, Request, Response, Cookie
 from schemas.user import UserCreate, User
 from schemas.token import Token
 from database import get_db
 from sqlalchemy.orm import Session
-import models
-from passlib.context import CryptContext
 from typing import Optional
-from datetime import datetime, timedelta
-from jose import jwt, JWTError
+from datetime import timedelta
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from utils import authUtils
+from fastapi_csrf_protect import CsrfProtect
+import models
 import config
 
-SECRET_KEY = config.SECRET_KEY
-ALGORITHM = config.ALGORITHM
+
 ACCESS_TOKEN_EXPIRE_MINUTES = int(config.ACCESS_TOKEN_EXPIRE_MINUTES)
 
 router = APIRouter(
     tags=['auth']
 )
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 oauth2_schema = OAuth2PasswordBearer(tokenUrl="login")
 
 
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
-
-
-def get_password_hash(password: str):
-    return pwd_context.hash(password)
-
-
-def get_user(token: str, db: Session = Depends(get_db)):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-    user = db.query(models.User).filter(models.User.username == username).first()
-    if user is None:
-        raise credentials_exception
-    return user
-
-
-def authenticate_user(username: str, password: str, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.username == username).first()
-    if not user:
-        return False
-    if not verify_password(password, user.password):
-        return False
-    return user
-
-
-def create_token(data: dict, expires_delta: Optional[timedelta] = None):
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=15)
-    to_encode.update({"exp": expire})
-    encode_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encode_jwt
-
-
-@router.post('/register', status_code=status.HTTP_201_CREATED)
-async def register(user: UserCreate, db: Session = Depends(get_db)):
-    if user.password != user.password_confirmation:
+@router.post('/register', status_code=status.HTTP_201_CREATED, response_model=User)
+async def register(
+    request: Request,
+    user_data: UserCreate, 
+    db: Session = Depends(get_db),
+    csrf_protect: CsrfProtect = Depends()
+):
+    authUtils.verify_csrf(csrf_protect, request.headers)
+    user = db.query(models.User).filter(models.User.email == user_data.email).first()
+    if user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="password does not match"
+            detail="username or email are already taken"
         )
+
     new_user = models.User(
-        username=user.username,
-        email=user.email,
-        password=get_password_hash(user.password)
+        username=user_data.username,
+        email=user_data.email,
+        password=authUtils.get_password_hash(user_data.password)
     )
     db.add(new_user)
     db.commit()
@@ -92,8 +49,15 @@ async def register(user: UserCreate, db: Session = Depends(get_db)):
 
 
 @router.post('/login', response_model=Token)
-async def login(response: Response, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = authenticate_user(form_data.username, form_data.password, db)
+async def login(
+    request: Request,
+    response: Response, 
+    form_data: OAuth2PasswordRequestForm = Depends(), 
+    db: Session = Depends(get_db),
+    csrf_protect: CsrfProtect = Depends()
+):
+    authUtils.verify_csrf(csrf_protect, request.headers)
+    user = authUtils.authenticate_user(form_data.username, form_data.password, db)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -102,16 +66,17 @@ async def login(response: Response, form_data: OAuth2PasswordRequestForm = Depen
         )
 
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_token(
+    access_token = authUtils.create_token(
         data={"sub": user.username}, expires_delta=access_token_expires
     )
 
     refresh_token_expires = timedelta(days=90)
-    refresh_token = create_token(
+    refresh_token = authUtils.create_token(
         data={"sub": user.username}, expires_delta=refresh_token_expires
     )
 
     user.refresh_token = refresh_token
+
     db.commit()
     db.refresh(user)
 
@@ -125,21 +90,29 @@ async def login(response: Response, form_data: OAuth2PasswordRequestForm = Depen
 
 
 @router.get('/user', status_code=status.HTTP_200_OK, response_model=User)
-async def get_current_user(access_token: str = Depends(oauth2_schema), db: Session = Depends(get_db)):
-    user = get_user(access_token, db)
+async def get_current_user(
+    access_token: str = Depends(oauth2_schema), 
+    db: Session = Depends(get_db)
+):
+    user = authUtils.get_user(access_token, db)
     return user
 
 
 @router.get("/refresh")
-async def refresh(refresh_token: Optional[str] = Cookie(None), db: Session = Depends(get_db)):
+async def refresh(
+    request: Request, 
+    refresh_token: Optional[str] = Cookie(None), 
+    db: Session = Depends(get_db)
+):
+
     if not refresh_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
-    user = get_user(refresh_token, db)
+    
+    user = authUtils.get_user(refresh_token, db)
 
     if not user.refresh_token == refresh_token:
         raise HTTPException(
@@ -149,7 +122,7 @@ async def refresh(refresh_token: Optional[str] = Cookie(None), db: Session = Dep
         )
 
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_token(
+    access_token = authUtils.create_token(
         data={"sub": user.username}, expires_delta=access_token_expires
     )
 
@@ -157,10 +130,23 @@ async def refresh(refresh_token: Optional[str] = Cookie(None), db: Session = Dep
 
 
 @router.post('/logout', status_code=status.HTTP_204_NO_CONTENT)
-async def logout(response: Response, access_token: str = Depends(oauth2_schema), db: Session = Depends(get_db)):
-    user = get_user(access_token, db)
+async def logout(
+    request: Request,
+    response: Response, 
+    access_token: str = Depends(oauth2_schema), 
+    db: Session = Depends(get_db),
+    csrf_protect: CsrfProtect = Depends()
+):
+    authUtils.verify_csrf(csrf_protect, request.headers)
+    user = authUtils.get_user(access_token, db)
     user.refresh_token = None
     db.commit()
     db.refresh(user)
     response.delete_cookie(key="refresh_token")
     return
+
+
+@router.get('/csrf')
+def form(request: Request, csrf_protect: CsrfProtect = Depends()):
+    csrf_token = csrf_protect.generate_csrf()
+    return {'csrf_token': csrf_token}

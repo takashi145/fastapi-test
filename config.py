@@ -15,3 +15,5 @@ DB_NAME = os.environ.get("DB_NAME")
 DB_PORT = os.environ.get("DB_PORT")
 DB_HOST = os.environ.get("DB_HOST")
 
+CSRF_KEY = os.environ.get("CSRF_KEY")
+
